@@ -138,12 +138,27 @@ FAQ_RULES = [
 ]
 
 
+GREETING_RULES = [
+    (r"^\s*(hi|hello|hey|good morning|good afternoon|good evening)\b", (
+        "Hello! I'm NAWASA Assist. I can help with water/sewerage "
+        "questions - things like office hours, leaks, bills, meter "
+        "reading, or disconnection/reconnection. What can I help with?"
+    )),
+    (r"\bthank|thanks\b", "You're welcome! Anything else I can help with?"),
+    (r"\bwho are you|what are you|your name\b", (
+        "I'm NAWASA Assist, the customer assistant for Grenada's National "
+        "Water & Sewerage Authority. Ask me about bills, leaks, meters, "
+        "office hours, or your account."
+    )),
+]
+
+
 def local_faq_answer(prompt: str):
     """Best-effort keyword-based answer, used when Gemini isn't available."""
 
     text = prompt.lower()
 
-    for pattern, answer in FAQ_RULES:
+    for pattern, answer in GREETING_RULES + FAQ_RULES:
 
         if re.search(pattern, text):
 
@@ -676,12 +691,30 @@ def render_chat_section():
         "### Ask NAWASA anything"
     )
 
-    if not st.session_state.get("api_key","").strip():
+    key_present = bool(st.session_state.get("api_key","").strip())
+    chat_ready = "chat" in st.session_state
+    init_error = st.session_state.get("chat_init_error")
+
+    if not key_present:
 
         st.caption(
             "💡 Add a Gemini API key in the sidebar for full AI answers - "
             "or just ask below, common questions are answered automatically."
         )
+
+    elif chat_ready:
+
+        st.caption("🟢 Connected to Gemini.")
+
+    else:
+
+        st.caption("🔴 Not connected to Gemini - using the built-in FAQ instead.")
+
+        if init_error:
+
+            with st.expander("Why? (connection error details)"):
+
+                st.code(init_error)
 
     for message in st.session_state.chat_history:
 
