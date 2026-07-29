@@ -4,9 +4,12 @@ Merged Version
 - Original Tide & Gauge UI
 - Gemini AI Chatbot
 - Grenada Version
+
+FIXED VERSION - see notes at bottom of chat message for what changed.
 """
 
 import os
+import re
 import streamlit as st
 
 from datetime import date, datetime, timedelta
@@ -31,75 +34,127 @@ st.set_page_config(
 
 MODEL_NAME = "gemini-3.1-flash-lite"
 
-SYSTEM_INSTRUCTION = """
-You are NAWASA Assist, the official customer assistant for
-Grenada's National Water & Sewerage Authority.
+SYSTEM_INSTRUCTION = """You are NAWASA Assist, the official customer assistant for
+Grenada's National Water & Sewerage Authority (NAWASA).
 
-Answer ONLY questions relating to NAWASA.
+Answer customer questions about NAWASA using the facts below. You may
+rephrase, summarize, and combine these facts to answer naturally -
+you are not limited to repeating them verbatim. If a customer asks
+something reasonably related to water/sewerage service in Grenada
+that isn't covered below (for example "how do I pay my bill" or
+"what happens if I don't pay"), give the most helpful general answer
+you can and suggest they confirm details with a NAWASA office.
 
-If information is unknown reply:
+If a question is completely unrelated to NAWASA or water/sewerage
+service (e.g. politics, other companies, personal advice), politely
+say you can only help with NAWASA-related questions.
 
-"I am sorry, I do not have that information."
+FACTS ABOUT NAWASA:
 
-Facts:
+- NAWASA stands for National Water & Sewerage Authority.
+- NAWASA serves Grenada, Carriacou, and Petite Martinique.
+- Mission: To provide clean, safe and reliable drinking water and
+  efficient sewage services.
+- Motto: Committed to Meeting Customers' Needs.
+- Email: communications@nawasa.gd
+- WhatsApp: 405-5245, 459-6064, 405-9143
+- Main Office: The Carenage, St. George's, Grenada
+- Office Hours: Monday-Friday, 8:00 AM - 4:00 PM
+- Cash Office Hours: 7:30 AM - 3:00 PM
+- Other offices: Grenville, Gouyave, and Grand Anse (all Mon-Fri 8:00 AM - 4:00 PM)
+- Customers can request: new connection, meter replacement, change of
+  name, change of mailing address, disconnection, or reconnection.
+- High water usage is often caused by leaks.
+- To detect a leak: turn off all taps, appliances, and outdoor hoses,
+  wait 1-2 hours, then check the meter. If it has moved, there is
+  likely a leak.
+- Water service may be disconnected for: customer request, non-payment
+  of arrears, illegal meter tampering, water wastage/abuse, or
+  unauthorized connections.
+- Reconnection normally happens after outstanding balances are paid
+  and reconnection requirements are met.
+- This portal also has tabs where customers can: report an outage,
+  estimate their bill, get help reading their meter, and schedule
+  maintenance - point users to those tabs when relevant.
 
-• NAWASA stands for National Water & Sewerage Authority.
-
-• NAWASA serves Grenada,
-Carriacou,
-and Petite Martinique.
-
-• Mission:
-To provide clean, safe and reliable drinking water and
-efficient sewage services.
-
-• Motto:
-Committed to Meeting Customers' Needs.
-
-• Email:
-communications@nawasa.gd
-
-• WhatsApp:
-405-5245
-459-6064
-405-9143
-
-• Main Office:
-The Carenage
-St. George's
-Grenada
-
-• Office Hours
-Monday-Friday
-8:00 AM - 4:00 PM
-
-• Cash Office
-7:30 AM - 3:00 PM
-
-• Customers can request:
-
-- New connection
-- Meter replacement
-- Change of name
-- Change of mailing address
-- Disconnection
-- Reconnection
-
-• High water usage may be caused by leaks.
-
-• To detect leaks:
-
-Turn off all taps.
-
-Wait 1-2 hours.
-
-If the meter moves,
-there is likely a leak.
-
-Stay polite,
-professional,
-and concise.
+Stay polite, professional, and concise. Keep replies short (2-5
+sentences) unless the customer asks for more detail.
 """
+
+# ---------------------------------------------------------
+# LOCAL FAQ FALLBACK (used when no API key is configured, or if the
+# Gemini call fails for any reason, so the assistant is never "dead")
+# ---------------------------------------------------------
+
+FAQ_RULES = [
+    (r"\bhour|open|close|time\b", (
+        "Our main office is open Monday-Friday, 8:00 AM - 4:00 PM. "
+        "The Cash Office is open 7:30 AM - 3:00 PM."
+    )),
+    (r"\bcontact|phone|whatsapp|email|reach\b", (
+        "You can reach us by email at communications@nawasa.gd, or via "
+        "WhatsApp at 405-5245, 459-6064, or 405-9143."
+    )),
+    (r"\boffice|location|address|where\b", (
+        "Our main office is at The Carenage, St. George's, Grenada. We also "
+        "have offices in Grenville, Gouyave, and Grand Anse - see the "
+        "Offices tab for details."
+    )),
+    (r"\bleak\b", (
+        "To check for a leak: turn off all taps, appliances, and outdoor "
+        "hoses, wait 1-2 hours, then check your meter. If it has moved, "
+        "you likely have a leak. You can also use the Meter tab's leak "
+        "checker, and report confirmed leaks in the Report tab."
+    )),
+    (r"\bmeter\b", (
+        "You can find step-by-step meter reading and leak-detection "
+        "instructions in the Meter tab of this portal."
+    )),
+    (r"\bdisconnect", (
+        "Water service may be disconnected for non-payment of arrears, "
+        "illegal meter tampering, water wastage, unauthorized connections, "
+        "or at the customer's request. See the Policy tab for details."
+    )),
+    (r"\breconnect", (
+        "Reconnection normally happens once outstanding balances are paid "
+        "and reconnection requirements are met. Contact your nearest "
+        "NAWASA office to confirm the process for your account."
+    )),
+    (r"\bbill|cost|price|rate|charge\b", (
+        "You can estimate your monthly bill in the Bill tab based on your "
+        "water usage in cubic meters (m³)."
+    )),
+    (r"\bnew connection|change of name|change of address|mailing\b", (
+        "You can request a new connection, meter replacement, change of "
+        "name, or change of mailing address at any NAWASA office, or use "
+        "the Schedule tab to request service."
+    )),
+    (r"\bmission|motto|about|what is nawasa\b", (
+        "NAWASA (National Water & Sewerage Authority) provides clean, safe "
+        "drinking water and efficient sewage services to Grenada, "
+        "Carriacou, and Petite Martinique. Our motto is: "
+        "\"Committed to Meeting Customers' Needs.\""
+    )),
+]
+
+
+def local_faq_answer(prompt: str):
+    """Best-effort keyword-based answer, used when Gemini isn't available."""
+
+    text = prompt.lower()
+
+    for pattern, answer in FAQ_RULES:
+
+        if re.search(pattern, text):
+
+            return answer
+
+    return (
+        "I am sorry, I do not have that information. For further "
+        "assistance, please contact NAWASA at communications@nawasa.gd "
+        "or WhatsApp 405-5245, 459-6064, or 405-9143."
+    )
+
 
 # ---------------------------------------------------------
 # SIDEBAR
@@ -118,14 +173,18 @@ with st.sidebar:
     if api_key:
         st.session_state.api_key = api_key
 
+    st.caption(
+        "Optional. Without a key, the assistant still answers common "
+        "NAWASA questions using a built-in FAQ."
+    )
+
     st.divider()
 
     if st.button("Reset Conversation"):
 
         st.session_state.pop("chat", None)
-        st.session_state.pop("messages", None)
-        st.session_state.pop("client", None)
         st.session_state.pop("chat_api_key", None)
+        st.session_state.pop("chat_history", None)
 
         st.rerun()
 
@@ -142,21 +201,33 @@ if api_key:
         or st.session_state.get("chat_api_key") != api_key
     ):
 
-        os.environ["GEMINI_API_KEY"] = api_key
+        try:
 
-        st.session_state.client = genai.Client()
+            # Pass the key directly to the client instead of os.environ.
+            # os.environ is process-wide, so on a shared/multi-user
+            # deployment one visitor's key could leak into another
+            # visitor's session. Passing it explicitly keeps each
+            # session's key isolated to that session's client.
+            client = genai.Client(api_key=api_key)
 
-        st.session_state.chat = (
-            st.session_state.client.chats.create(
+            chat = client.chats.create(
                 model=MODEL_NAME,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
                     temperature=0.7,
                 ),
             )
-        )
 
-        st.session_state.chat_api_key = api_key
+            st.session_state.client = client
+            st.session_state.chat = chat
+            st.session_state.chat_api_key = api_key
+            st.session_state.chat_init_error = None
+
+        except Exception as e:
+
+            st.session_state.pop("chat", None)
+            st.session_state.pop("chat_api_key", None)
+            st.session_state.chat_init_error = str(e)
 
 # ---------------------------------------------------------
 # CSS
@@ -261,6 +332,84 @@ max-width:520px;
 
 }
 
+.hero-wave{
+
+line-height:0;
+
+}
+
+/* Section eyebrow (small kicker label above each section heading) */
+
+.section-eyebrow{
+
+display:inline-block;
+
+color:#0F7173;
+
+font-family:'JetBrains Mono';
+
+font-size:.72rem;
+
+letter-spacing:.08em;
+
+text-transform:uppercase;
+
+margin-top:1.5rem;
+
+}
+
+/* Gauge (used for bill estimate & meter difference readouts) */
+
+.gauge{
+
+background:#EAF3F1;
+
+border-radius:16px;
+
+padding:1.5rem;
+
+text-align:center;
+
+}
+
+.gauge-label{
+
+font-family:'JetBrains Mono';
+
+font-size:.75rem;
+
+letter-spacing:.06em;
+
+text-transform:uppercase;
+
+color:#0F7173;
+
+}
+
+.gauge-value{
+
+font-family:'Space Grotesk',sans-serif;
+
+font-size:2.4rem;
+
+font-weight:700;
+
+color:#0B3D59;
+
+margin:.25rem 0;
+
+}
+
+.gauge-unit{
+
+font-family:'JetBrains Mono';
+
+font-size:.8rem;
+
+color:#5B7A82;
+
+}
+
 /* Tabs */
 
 .stTabs [data-baseweb="tab-list"]{
@@ -341,7 +490,6 @@ def init_state():
 
         "maintenance_requests":[],
 
-        "messages":[]
     }
 
     for k,v in defaults.items():
@@ -471,24 +619,46 @@ def ask_gemini(prompt):
 
     api_key = st.session_state.get("api_key","").strip()
 
+    # No key configured -> use the local FAQ so the assistant still
+    # answers sensibly instead of just refusing.
     if not api_key:
 
-        return (
-            "Please enter your Gemini API key in the sidebar "
-            "before chatting."
-        )
+        return local_faq_answer(prompt)
+
+    # Key was entered but the client/chat failed to initialize.
+    if "chat" not in st.session_state:
+
+        err = st.session_state.get("chat_init_error")
+
+        fallback = local_faq_answer(prompt)
+
+        if err:
+
+            return (
+                f"(Gemini could not be reached, so here's what I can tell "
+                f"you from our FAQ.)\n\n{fallback}"
+            )
+
+        return fallback
 
     try:
 
-        response = (
-            st.session_state.chat.send_message(prompt)
-        )
+        response = st.session_state.chat.send_message(prompt)
 
-        return response.text
+        text = getattr(response, "text", None)
 
-    except Exception as e:
+        if text:
 
-        return f"Error: {e}"
+            return text
+
+        # Response came back but had no usable text (e.g. safety block)
+        return local_faq_answer(prompt)
+
+    except Exception:
+
+        # Don't leak raw exception text to the customer; fall back
+        # to the local FAQ so the conversation still feels sensible.
+        return local_faq_answer(prompt)
 
 
 # ---------------------------------------------------------
@@ -506,18 +676,11 @@ def render_chat_section():
         "### Ask NAWASA anything"
     )
 
-    if len(st.session_state.chat_history)==0:
+    if not st.session_state.get("api_key","").strip():
 
-        st.session_state.chat_history.append(
-
-            {
-                "role":"assistant",
-
-                "content":
-                "Welcome to NAWASA Customer Services. "
-                "How may I help you today?"
-            }
-
+        st.caption(
+            "💡 Add a Gemini API key in the sidebar for full AI answers - "
+            "or just ask below, common questions are answered automatically."
         )
 
     for message in st.session_state.chat_history:
